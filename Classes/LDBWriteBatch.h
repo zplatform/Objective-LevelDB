@@ -11,7 +11,7 @@
 
 @interface LDBWritebatch : NSObject
 
-@property (nonatomic, assign) id db;
+@property (nonatomic) id db;
 
 /**
  Remove a key (and its associated value) from the database
@@ -37,7 +37,7 @@
  
  The instance's encoder block will *not* be used to produce a NSData instance from the provided value.
  
- @param data The raw data value to put in the database
+ @param value The raw data value to put in the database
  @param key The key at which the value can be found
  */
 - (void) setData:(NSData *)data forKey:(id)key;

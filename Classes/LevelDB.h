@@ -7,6 +7,8 @@
 
 #import <Foundation/Foundation.h>
 
+#define ZA_OBJC_LEVELDB_CUSTOMIZE (1)
+
 @class LDBSnapshot;
 @class LDBWritebatch;
 
@@ -18,7 +20,31 @@ typedef struct LevelDBOptions {
     BOOL compression     ;
     int  filterPolicy    ;
     size_t cacheSize;
+#if ZA_OBJC_LEVELDB_CUSTOMIZE
+    BOOL optimizeSyncFile; // Default to NO
+    BOOL reuseLogs; // Default to NO
+#endif // ZA_OBJC_LEVELDB_CUSTOMIZE
 } LevelDBOptions;
+
+#if ZA_OBJC_LEVELDB_CUSTOMIZE
+typedef NS_ENUM(NSUInteger, LevelDBError) {
+    LevelDBErrorNone = 0,
+    LevelDBErrorUnknown = 100,
+    
+    // Main error
+    LevelDBErrorNotFound = 1,
+    LevelDBErrorCorruption = 2,
+    LevelDBErrorNotSupport = 3,
+    LevelDBErrorInvalidArgument = 4,
+    LevelDBErrorIO = 5,
+    
+    // Detail error
+    LevelDBErrorIO_OperationNotpermitted = 50, // Operation not permitted
+    LevelDBErrorIO_BadFileDescriptor = 51, // Bad file descriptor
+    LevelDBErrorIO_AlreadyHeldByProcess = 52, // LOCK: already held by process
+    LevelDBErrorIO_FullStorage = 53, // No space left on device
+};
+#endif // ZA_OBJC_LEVELDB_CUSTOMIZE
 
 typedef struct {
     const char * data;
@@ -60,12 +86,12 @@ NSData   * NSDataFromLevelDBKey  (LevelDBKey * key);
 /**
  The path of the database on disk
  */
-@property (nonatomic, copy) NSString *path;
+@property (nonatomic, retain) NSString *path;
 
 /**
  The name of the database.
  */
-@property (nonatomic, copy) NSString *name;
+@property (nonatomic, retain) NSString *name;
 
 /**
  A boolean value indicating whether write operations should be synchronous (flush to disk before returning).
@@ -127,7 +153,11 @@ NSData   * NSDataFromLevelDBKey  (LevelDBKey * key);
  @param name the filename of the database file on disk
  @param opts A LevelDBOptions struct with options for fine tuning leveldb
  */
-- (id) initWithPath:(NSString *)path name:(NSString *)name andOptions:(LevelDBOptions)opts;
+- (id) initWithPath:(NSString *)path name:(NSString *)name andOptions:(LevelDBOptions)opts
+#if ZA_OBJC_LEVELDB_CUSTOMIZE
+              error:(NSError **)error
+#endif // ZA_OBJC_LEVELDB_CUSTOMIZE
+;
 
 
 /**

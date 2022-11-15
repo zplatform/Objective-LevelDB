@@ -15,7 +15,17 @@
 #import <leveldb/filter_policy.h>
 #import <leveldb/write_batch.h>
 
+#if ZA_OBJC_LEVELDB_CUSTOMIZE
+#import <leveldb/env.h>
+#endif // ZA_OBJC_LEVELDB_CUSTOMIZE
+
+#import <ZAFoundation/ZAFoundation.h>
+
+#define _ZA_LEVELDB_OPTIMIZE (ZA_OBJC_LEVELDB_CUSTOMIZE && ZA_OPTIMIZE_SYNC_FILE)
+
 #include "LDBCommon.h"
+
+#define RENEW_ON_CORRUPTED (1 && ZA_OBJC_LEVELDB_CUSTOMIZE)
 
 #define MaybeAddSnapshotToOptions(_from_, _to_, _snap_) \
     leveldb::ReadOptions __to_;\
@@ -57,9 +67,9 @@ namespace {
 }
 
 NSString * NSStringFromLevelDBKey(LevelDBKey * key) {
-    return [[[NSString alloc] initWithBytes:key->data
+    return [[NSString alloc] initWithBytes:key->data
                                     length:key->length
-                                  encoding:NSUTF8StringEncoding] autorelease];
+                                  encoding:NSUTF8StringEncoding];
 }
 NSData   * NSDataFromLevelDBKey(LevelDBKey * key) {
     return [NSData dataWithBytes:key->data length:key->length];
@@ -77,7 +87,12 @@ NSString * const kLevelDBChangeValue        = @"value";
 NSString * const kLevelDBChangeKey          = @"key";
 
 LevelDBOptions MakeLevelDBOptions() {
-    return (LevelDBOptions) {true, true, false, false, true, 0, 0};
+    return (LevelDBOptions) {true, true, false, false, true, 0, 0
+#if ZA_OBJC_LEVELDB_CUSTOMIZE
+        , false
+        , false
+#endif // ZA_OBJC_LEVELDB_CUSTOMIZE
+    };
 }
 
 @interface LDBSnapshot ()
@@ -91,11 +106,11 @@ LevelDBOptions MakeLevelDBOptions() {
 @end
 
 @interface LevelDB () {
-    leveldb::DB *db;
+    leveldb::DB * db;
     leveldb::ReadOptions readOptions;
     leveldb::WriteOptions writeOptions;
-    const leveldb::Cache *cache;
-    const leveldb::FilterPolicy *filterPolicy;
+    const leveldb::Cache * cache;
+    const leveldb::FilterPolicy * filterPolicy;
 }
 
 @property (nonatomic, readonly) leveldb::DB * db;
@@ -110,21 +125,50 @@ LevelDBOptions MakeLevelDBOptions() {
 + (LevelDBOptions) makeOptions {
     return MakeLevelDBOptions();
 }
+
+#if _ZA_LEVELDB_OPTIMIZE
++ (leveldb::Env *)optimizePosixEnv {
+    static leveldb::Env *instance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        instance = leveldb::Env::ZAMakePosixEnv(leveldb::Env::ZASyncFileType_fsync);
+    });
+    return instance;
+}
+#endif // _ZA_LEVELDB_OPTIMIZE
+
 - (id) initWithPath:(NSString *)path andName:(NSString *)name {
     LevelDBOptions opts = MakeLevelDBOptions();
+#if ZA_OBJC_LEVELDB_CUSTOMIZE
+    return [self initWithPath:path name:name andOptions:opts error:nil];
+#else // ZA_OBJC_LEVELDB_CUSTOMIZE
     return [self initWithPath:path name:name andOptions:opts];
+#endif // !ZA_OBJC_LEVELDB_CUSTOMIZE
 }
-- (id) initWithPath:(NSString *)path name:(NSString *)name andOptions:(LevelDBOptions)opts {
+
+- (id) initWithPath:(NSString *)path name:(NSString *)name andOptions:(LevelDBOptions)opts
+#if ZA_OBJC_LEVELDB_CUSTOMIZE
+              error:(NSError *__autoreleasing *)error
+#endif // ZA_OBJC_LEVELDB_CUSTOMIZE
+{
     self = [super init];
     if (self) {
-        _name = [name retain];
-        _path = [[path stringByAppendingPathComponent:name] retain];
+        _name = name;
+        _path = path;
         
         leveldb::Options options;
+#if _ZA_LEVELDB_OPTIMIZE
+        if (opts.optimizeSyncFile) {
+            options.env = [LevelDB optimizePosixEnv];
+        }
+#endif // _ZA_LEVELDB_OPTIMIZE
         
         options.create_if_missing = opts.createIfMissing;
         options.paranoid_checks = opts.paranoidCheck;
         options.error_if_exists = opts.errorIfExists;
+#if ZA_OBJC_LEVELDB_CUSTOMIZE
+        options.reuse_logs = opts.reuseLogs;
+#endif // ZA_OBJC_LEVELDB_CUSTOMIZE
         
         if (!opts.compression)
             options.compression = leveldb::kNoCompression;
@@ -136,16 +180,15 @@ LevelDBOptions MakeLevelDBOptions() {
             readOptions.fill_cache = false;
         
         if (opts.createIntermediateDirectories) {
+            NSString *dirpath = [path stringByDeletingLastPathComponent];
             NSFileManager *fm = [NSFileManager defaultManager];
             NSError *crError;
             
-            BOOL success = [fm createDirectoryAtPath:path
+            BOOL success = [fm createDirectoryAtPath:dirpath
                          withIntermediateDirectories:true
                                           attributes:nil
                                                error:&crError];
             if (!success) {
-                [_name release];
-                [_path release];
                 NSLog(@"Problem creating parent directory: %@", crError);
                 return nil;
             }
@@ -161,10 +204,39 @@ LevelDBOptions MakeLevelDBOptions() {
         writeOptions.sync = false;
         
         if(!status.ok()) {
-            [_name release];
-            [_path release];
+#if ZA_OBJC_LEVELDB_CUSTOMIZE
+            if (error) {
+                *error = [self _errorFromStatus:status];
+            }
+#endif // ZA_OBJC_LEVELDB_CUSTOMIZE
             NSLog(@"Problem creating LevelDB database: %s", status.ToString().c_str());
+            
+#if RENEW_ON_CORRUPTED
+            if (!status.IsCorruption()) return nil;
+            
+            NSLog(@"Try to renew LevelDB on corrupted [%@]", name);
+            BOOL success = [NSFileManager.defaultManager removeItemAtPath:_path error:nil];
+            if (!success) return nil;
+            
+            if (db != NULL) {
+                delete db;
+                db = NULL;
+            }
+            
+            status = leveldb::DB::Open(options, _path.UTF8String, &db);
+            
+#if ZA_OBJC_LEVELDB_CUSTOMIZE
+            if (error && !status.ok()) {
+                *error = [self _errorFromStatus:status];
+            }
+#endif // ZA_OBJC_LEVELDB_CUSTOMIZE
+            
+            if (!status.ok()) return nil;
+            
+            NSLog(@"Renew LevelDB successful [%@]", name);
+#else // RENEW_ON_CORRUPTED
             return nil;
+#endif // !RENEW_ON_CORRUPTED
         }
         
         self.encoder = ^ NSData *(LevelDBKey *key, id object) {
@@ -178,7 +250,17 @@ LevelDBOptions MakeLevelDBOptions() {
             return [NSKeyedArchiver archivedDataWithRootObject:object];
         };
         self.decoder = ^ id (LevelDBKey *key, NSData *data) {
+#if ZA_OBJC_LEVELDB_CUSTOMIZE
+            id obj;
+            @try {
+                obj = [NSKeyedUnarchiver unarchiveObjectWithData:data];
+            } @catch (NSException *exception) {
+                ZFDWeakAssert(NO, @"[LevelDB] Decode failed w/e %@", exception);
+            }
+            return obj;
+#else // ZA_OBJC_LEVELDB_CUSTOMIZE
             return [NSKeyedUnarchiver unarchiveObjectWithData:data];
+#endif // !ZA_OBJC_LEVELDB_CUSTOMIZE
         };
     }
     
@@ -191,7 +273,12 @@ LevelDBOptions MakeLevelDBOptions() {
 }
 + (id) databaseInLibraryWithName:(NSString *)name
                       andOptions:(LevelDBOptions)opts {
-    LevelDB *ldb = [[[self alloc] initWithPath:getLibraryPath() name:name andOptions:opts] autorelease];
+    NSString *path = [getLibraryPath() stringByAppendingPathComponent:name];
+#if ZA_OBJC_LEVELDB_CUSTOMIZE
+    LevelDB *ldb = [[self alloc] initWithPath:path name:name andOptions:opts error:nil];
+#else // ZA_OBJC_LEVELDB_CUSTOMIZE
+    LevelDB *ldb = [[self alloc] initWithPath:path name:name andOptions:opts];
+#endif // !ZA_OBJC_LEVELDB_CUSTOMIZE
     return ldb;
 }
 
@@ -242,7 +329,7 @@ LevelDBOptions MakeLevelDBOptions() {
 #pragma mark - Write batches
 
 - (LDBWritebatch *)newWritebatch {
-    return [[LDBWritebatch writeBatchFromDB:self] retain];
+    return [LDBWritebatch writeBatchFromDB:self];
 }
 
 - (void) applyWritebatch:(LDBWritebatch *)writeBatch {
@@ -257,7 +344,6 @@ LevelDBOptions MakeLevelDBOptions() {
     LDBWritebatch *wb = [self newWritebatch];
     block(wb);
     [wb apply];
-    [wb release];
 }
 
 #pragma mark - Getters
@@ -357,7 +443,7 @@ LevelDBOptions MakeLevelDBOptions() {
     leveldb::Slice lkey;
     
     const void *prefixPtr;
-    size_t prefixLen;
+    size_t prefixLen = 0;
     prefix = EnsureNSData(prefix);
     if (prefix) {
         prefixPtr = [(NSData *)prefix bytes];
@@ -380,14 +466,14 @@ LevelDBOptions MakeLevelDBOptions() {
 #pragma mark - Selection
 
 - (NSArray *)allKeys {
-    NSMutableArray *keys = [[[NSMutableArray alloc] init] autorelease];
+    NSMutableArray *keys = [[NSMutableArray alloc] init];
     [self enumerateKeysUsingBlock:^(LevelDBKey *key, BOOL *stop) {
         [keys addObject:NSDataFromLevelDBKey(key)];
     }];
     return [NSArray arrayWithArray:keys];
 }
 - (NSArray *)keysByFilteringWithPredicate:(NSPredicate *)predicate {
-    NSMutableArray *keys = [[[NSMutableArray alloc] init] autorelease];
+    NSMutableArray *keys = [[NSMutableArray alloc] init];
     [self enumerateKeysAndObjectsBackward:NO lazily:NO
                             startingAtKey:nil
                       filteredByPredicate:predicate
@@ -414,7 +500,7 @@ LevelDBOptions MakeLevelDBOptions() {
 }
 
 - (LDBSnapshot *) newSnapshot {
-    return [[LDBSnapshot snapshotFromDB:self] retain];
+    return [LDBSnapshot snapshotFromDB:self];
 }
 
 #pragma mark - Enumeration
@@ -660,12 +746,13 @@ LevelDBOptions MakeLevelDBOptions() {
     @synchronized(self) {
         if (db) {
             delete db;
-            if (cache) {
+            
+            if (cache)
                 delete cache;
-            }
-            if (filterPolicy) {
+            
+            if (filterPolicy)
                 delete filterPolicy;
-            }
+            
             db = NULL;
         }
     }
@@ -675,11 +762,65 @@ LevelDBOptions MakeLevelDBOptions() {
 }
 - (void) dealloc {
     [self close];
-    if (_path) [_path release];
-    if (_name) [_name release];
-    if (_encoder) [_encoder release];
-    if (_decoder) [_decoder release];
-    [super dealloc];
 }
+
+#if ZA_OBJC_LEVELDB_CUSTOMIZE
+#pragma mark - Helper
+
+- (LevelDBError)_getErrorCodeFromStatus:(leveldb::Status)status {
+    if (status.ok()) {
+        return LevelDBErrorNone;
+    } else if (status.IsCorruption()) {
+        return LevelDBErrorCorruption;
+    } else if (status.IsIOError()) {
+        return LevelDBErrorIO;
+    } else if (status.IsNotFound()) {
+        return LevelDBErrorNotFound;
+    } else if (status.IsInvalidArgument()) {
+        return LevelDBErrorInvalidArgument;
+    }
+    return LevelDBErrorUnknown;
+}
+
+- (nullable NSError *)_errorFromStatus:(leveldb::Status)status {
+    LevelDBError code = [self _getErrorCodeFromStatus:status];
+    if (code == LevelDBErrorNone) {
+        return nil;
+    }
+        
+    NSString *errorMsg = [[NSString alloc] initWithUTF8String:status.ToString().c_str()];
+    NSDictionary *userInfo = @{
+        NSLocalizedDescriptionKey: errorMsg
+    };
+    code = [self _detailErrorCodeFrom:code msg:errorMsg];
+    
+    return [NSError errorWithDomain:@"com.vng.zingalo.obj_leveldb"
+                               code:code
+                           userInfo:userInfo];
+}
+
+- (LevelDBError)_detailErrorCodeFrom:(LevelDBError)mainErrorCode
+                                 msg:(NSString *)msg {
+    if (mainErrorCode != LevelDBErrorIO) {
+        return mainErrorCode;
+    }
+    if (![msg isKindOfClass:NSString.class] || msg.length == 0) {
+        return mainErrorCode;
+    }
+    
+    if ([msg containsString:@"Operation not permitted"]) {
+        return LevelDBErrorIO_OperationNotpermitted;
+    } else if ([msg containsString:@"Bad file descriptor"]) {
+        return LevelDBErrorIO_BadFileDescriptor;
+    } else if ([msg containsString:@"already held by process"]) {
+        return LevelDBErrorIO_AlreadyHeldByProcess;
+    } else if ([msg containsString:@"No space left on device"]) {
+        return LevelDBErrorIO_FullStorage;
+    }
+    
+    return mainErrorCode;
+}
+
+#endif // ZA_OBJC_LEVELDB_CUSTOMIZE
 
 @end
