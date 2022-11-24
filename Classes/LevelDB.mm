@@ -5,7 +5,7 @@
 //  See LICENCE for details.
 //
 
-#import "LevelDB.h"
+#import <ObjLevelDB/LevelDB.h>
 #import "LDBSnapshot.h"
 #import "LDBWriteBatch.h"
 

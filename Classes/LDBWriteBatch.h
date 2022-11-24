@@ -7,8 +7,6 @@
 
 #import <Foundation/Foundation.h>
 
-#import "LevelDB.h"
-
 @interface LDBWritebatch : NSObject
 
 @property (nonatomic) id db;

@@ -6,9 +6,7 @@
 //
 
 #import <Foundation/Foundation.h>
-#import "LevelDB.h"
-
-@class LevelDB;
+#import <ObjLevelDB/LevelDB.h>
 
 @interface LDBSnapshot : NSObject 
 
