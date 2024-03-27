@@ -297,6 +297,22 @@ LevelDBOptions MakeLevelDBOptions() {
 
 #pragma mark - Setters
 
+- (void) setRawData:(id)data forKey:(id)key {
+    AssertDBExists(db);
+    AssertKeyType(key);
+    NSParameterAssert(data != nil);
+    
+    leveldb::Slice k = KeyFromStringOrData(key);
+
+    leveldb::Slice v = SliceFromData(data);
+    
+    leveldb::Status status = db->Put(writeOptions, k, v);
+    
+    if(!status.ok()) {
+        NSLog(@"Problem storing key/value pair in database: %s", status.ToString().c_str());
+    }
+}
+
 - (void) setObject:(id)value forKey:(id)key {
     AssertDBExists(db);
     AssertKeyType(key);
@@ -332,12 +348,13 @@ LevelDBOptions MakeLevelDBOptions() {
     return [LDBWritebatch writeBatchFromDB:self];
 }
 
-- (void) applyWritebatch:(LDBWritebatch *)writeBatch {
+- (BOOL) applyWritebatch:(LDBWritebatch *)writeBatch {
     leveldb::WriteBatch wb = [writeBatch writeBatch];
     leveldb::Status status = db->Write(writeOptions, &wb);
     if(!status.ok()) {
         NSLog(@"Problem applying the write batch in database: %s", status.ToString().c_str());
     }
+    return status.ok();
 }
 
 - (void)performWritebatch:(void (^)(LDBWritebatch *wb))block {
@@ -348,11 +365,16 @@ LevelDBOptions MakeLevelDBOptions() {
 
 #pragma mark - Getters
 
+- (NSData *)rawDataForKey:(id)key {
+    return [self objectForKey:key withSnapshot:nil shouldDecodeObject:NO];
+}
+
 - (id) objectForKey:(id)key {
-    return [self objectForKey:key withSnapshot:nil];
+    return [self objectForKey:key withSnapshot:nil shouldDecodeObject:YES];
 }
 - (id) objectForKey:(id)key
-       withSnapshot:(LDBSnapshot *)snapshot {
+       withSnapshot:(LDBSnapshot *)snapshot
+ shouldDecodeObject:(BOOL)shouldDecodeObject {
     
     AssertDBExists(db);
     AssertKeyType(key);
@@ -365,6 +387,10 @@ LevelDBOptions MakeLevelDBOptions() {
         if(!status.IsNotFound())
             NSLog(@"Problem retrieving value for key '%@' from database: %s", key, status.ToString().c_str());
         return nil;
+    }
+    
+    if (!shouldDecodeObject) {
+        return DataFromSlice(v_string);
     }
     
     LevelDBKey lkey = GenericKeyFromSlice(k);
@@ -387,7 +413,7 @@ LevelDBOptions MakeLevelDBOptions() {
         return [self objectForKey:key];
 }
 - (id) objectForKeyedSubscript:(id)key {
-    return [self objectForKey:key withSnapshot:nil];
+    return [self objectForKey:key withSnapshot:nil shouldDecodeObject:YES];
 }
 
 - (BOOL) objectExistsForKey:(id)key {

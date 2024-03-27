@@ -175,6 +175,11 @@ NSData   * NSDataFromLevelDBKey  (LevelDBKey * key);
 #pragma mark - Setters
 
 /**
+ Write raw data into database without encoding
+ */
+- (void) setRawData:(id)data forKey:(id)key;
+
+/**
  Set the value associated with a key in the database
  
  The instance's encoder block will be used to produce a NSData instance from the provided value.
@@ -211,7 +216,7 @@ NSData   * NSDataFromLevelDBKey  (LevelDBKey * key);
 /**
  Apply the operations from a writebatch into the current database
  */
-- (void) applyWritebatch:(LDBWritebatch *)writeBatch;
+- (BOOL) applyWritebatch:(LDBWritebatch *)writeBatch;
 
 /**
  Create new writebatch, apply the operations in block from a writebatch into the current database
@@ -219,6 +224,14 @@ NSData   * NSDataFromLevelDBKey  (LevelDBKey * key);
 - (void) performWritebatch:(void (^)(LDBWritebatch *wb))block;
 
 #pragma mark - Getters
+
+/**
+ Return the raw data associated with a key
+ 
+ @param key The key to retrieve from the database
+ */
+
+- (NSData *)rawDataForKey:(id)key;
 
 /**
  Return the value associated with a key

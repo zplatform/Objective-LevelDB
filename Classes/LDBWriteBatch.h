@@ -70,6 +70,6 @@
 /**
  Apply the write batch to the underlying database
  */
-- (void) apply;
+- (BOOL) apply;
 
 @end

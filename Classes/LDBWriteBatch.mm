@@ -1,12 +1,13 @@
 //
 //  WriteBatch.mm
 //
-//  Copyright 2013 Storm Labs. 
+//  Copyright 2013 Storm Labs.
 //  See LICENCE for details.
 //
 
 #import <leveldb/db.h>
 #import <leveldb/write_batch.h>
+#import <os/lock.h>
 
 #import "LDBWriteBatch.h"
 #import "LDBCommon.h"
@@ -22,7 +23,7 @@
 @end
 
 @implementation LDBWritebatch {
-    dispatch_queue_t _serial_queue;
+    os_unfair_lock _locker;
 }
 
 @synthesize writeBatch = _writeBatch;
@@ -37,14 +38,11 @@
 - (instancetype) init {
     self = [super init];
     if (self) {
-        _serial_queue = dispatch_queue_create(NULL, DISPATCH_QUEUE_SERIAL);
+        _locker = OS_UNFAIR_LOCK_INIT;
     }
     return self;
 }
 - (void)dealloc {
-    if (_serial_queue) {
-        _serial_queue = nil;
-    }
     if (_db) {
         _db = nil;
     }
@@ -53,9 +51,9 @@
 - (void) removeObjectForKey:(id)key {
     AssertKeyType(key);
     leveldb::Slice k = KeyFromStringOrData(key);
-    dispatch_sync(_serial_queue, ^{
-        _writeBatch.Delete(k);
-    });
+    os_unfair_lock_lock(&_locker);
+    _writeBatch.Delete(k);
+    os_unfair_lock_unlock(&_locker);
 }
 - (void) removeObjectsForKeys:(NSArray *)keyArray {
     [keyArray enumerateObjectsUsingBlock:^(id obj, NSUInteger idx, BOOL *stop) {
@@ -70,22 +68,22 @@
 
 - (void) setData:(NSData *)data forKey:(id)key {
     AssertKeyType(key);
-    dispatch_sync(_serial_queue, ^{
-        leveldb::Slice lkey = KeyFromStringOrData(key);
-        _writeBatch.Put(lkey, SliceFromData(data));
-    });
+    os_unfair_lock_lock(&_locker);
+    leveldb::Slice lkey = KeyFromStringOrData(key);
+    _writeBatch.Put(lkey, SliceFromData(data));
+    os_unfair_lock_unlock(&_locker);
 }
 - (void) setObject:(id)value forKey:(id)key {
     AssertKeyType(key);
-    dispatch_sync(_serial_queue, ^{
-        leveldb::Slice k = KeyFromStringOrData(key);
-        LevelDBKey lkey = GenericKeyFromSlice(k);
-        
-        NSData *data = ((LevelDB *)_db).encoder(&lkey, value);
-        leveldb::Slice v = SliceFromData(data);
-        
-        _writeBatch.Put(k, v);
-    });
+    os_unfair_lock_lock(&_locker);
+    leveldb::Slice k = KeyFromStringOrData(key);
+    LevelDBKey lkey = GenericKeyFromSlice(k);
+    
+    NSData *data = ((LevelDB *)_db).encoder(&lkey, value);
+    leveldb::Slice v = SliceFromData(data);
+    
+    _writeBatch.Put(k, v);
+    os_unfair_lock_unlock(&_locker);
 }
 - (void) setValue:(id)value forKey:(NSString *)key {
     [self setObject:value forKey:key];
@@ -99,8 +97,8 @@
     }];
 }
 
-- (void) apply {
-    [_db applyWritebatch:self];
+- (BOOL) apply {
+    return [_db applyWritebatch:self];
 }
 
 @end
