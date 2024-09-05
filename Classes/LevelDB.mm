@@ -816,6 +816,8 @@ LevelDBOptions MakeLevelDBOptions() {
         return LevelDBErrorIO_AlreadyHeldByProcess;
     } else if ([msg containsString:@"No space left on device"]) {
         return LevelDBErrorIO_FullStorage;
+    } else if ([msg containsString:@"Too many open files"]) {
+        return LevelDBErrorIO_TooManyOpenFiles;
     }
     
     return mainErrorCode;
