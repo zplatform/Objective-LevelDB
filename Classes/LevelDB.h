@@ -43,6 +43,7 @@ typedef NS_ENUM(NSUInteger, LevelDBError) {
     LevelDBErrorIO_BadFileDescriptor = 51, // Bad file descriptor
     LevelDBErrorIO_AlreadyHeldByProcess = 52, // LOCK: already held by process
     LevelDBErrorIO_FullStorage = 53, // No space left on device
+    LevelDBErrorIO_TooManyOpenFiles = 54, // Too many open files
 };
 #endif // ZA_OBJC_LEVELDB_CUSTOMIZE
 
